@@ -21,9 +21,10 @@ public class LogMinerEvent {
     private final EventType eventType;
     private final Scn scn;
     private final TableId tableId;
-    private final String rowId;
+    private String rowId;
     private final String rsId;
     private final Instant changeTime;
+    private boolean rolledBack;
 
     // These are purposely only used by the bufferless implementation
     private String transactionId;
@@ -60,8 +61,20 @@ public class LogMinerEvent {
         return rowId;
     }
 
+    public void setRowId(String rowId) {
+        this.rowId = rowId;
+    }
+
     public String getRsId() {
         return rsId;
+    }
+
+    public boolean isRolledBack() {
+        return rolledBack;
+    }
+
+    public void markAsRolledBack() {
+        this.rolledBack = true;
     }
 
     public Instant getChangeTime() {

@@ -134,14 +134,14 @@ public class InfinispanLogMinerTransactionCache extends AbstractLogMinerTransact
     }
 
     @Override
-    public boolean removeTransactionEventWithRowId(InfinispanTransaction transaction, String rowId) {
+    public boolean rollbackTransactionEventWithRowId(InfinispanTransaction transaction, String rowId) {
         final TreeSet<Integer> eventIds = eventIdsByTransactionId.get(transaction.getTransactionId());
         for (Integer eventId : eventIds.descendingSet()) {
             final String eventKey = transaction.getEventId(eventId);
             final LogMinerEvent event = eventCache.get(eventKey);
             if (event != null && event.getRowId().equals(rowId)) {
-                eventCache.remove(eventKey);
-                eventIds.remove(eventId);
+                event.markAsRolledBack();
+                eventCache.put(eventKey, event);
                 return true;
             }
         }
