@@ -194,7 +194,7 @@ public class UnbufferedLogMinerStreamingChangeEventSource extends AbstractLogMin
     @Override
     protected void enqueueEvent(LogMinerEventRow event, LogMinerEvent dispatchedEvent) throws InterruptedException {
         getMetrics().calculateLagFromSource(event.getChangeTime());
-        accumulator.accept(dispatchedEvent);
+        accumulator.accept(dispatchedEvent, false);
     }
 
     @Override
