@@ -49,6 +49,7 @@ import io.debezium.connector.oracle.logminer.events.EventType;
 import io.debezium.connector.oracle.logminer.events.LogMinerEvent;
 import io.debezium.connector.oracle.logminer.events.LogMinerEventRow;
 import io.debezium.connector.oracle.logminer.events.RedoSqlDmlEvent;
+import io.debezium.connector.oracle.logminer.events.RowIdCodec;
 import io.debezium.connector.oracle.logminer.events.TruncateEvent;
 import io.debezium.connector.oracle.logminer.logwriter.LogWriterFlushStrategy;
 import io.debezium.data.Envelope;
@@ -245,7 +246,7 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
     @SuppressWarnings("unchecked")
     private <T extends Transaction> CacheProvider<T> createCacheProvider(OracleConnectorConfig connectorConfig) {
         return (CacheProvider<T>) switch (connectorConfig.getLogMiningBufferType()) {
-            case MEMORY -> new MemoryCacheProvider(connectorConfig);
+            case MEMORY -> new MemoryCacheProvider(connectorConfig, getMetrics());
             case INFINISPAN_EMBEDDED -> new EmbeddedInfinispanCacheProvider(connectorConfig);
             case INFINISPAN_REMOTE -> new RemoteInfinispanCacheProvider(connectorConfig);
             case EHCACHE -> new EhcacheCacheProvider(connectorConfig);
@@ -366,6 +367,33 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
     }
 
     @Override
+    protected void handleInternalEvent(LogMinerEventRow event) throws InterruptedException {
+        final Transaction transaction = getTransactionCache().getTransaction(event.getTransactionId());
+        if (transaction != null) {
+            final LogMinerEvent lastCachedEvent = getTransactionCache().getLastTransactionEvent(transaction);
+            if (lastCachedEvent != null && lastCachedEvent.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
+                if (event.getTableId() == null || event.getTableId().equals(lastCachedEvent.getTableId())) {
+                    if (event.getTableName() != null) {
+                        LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID after a cached event with empty ROW_ID has TABLE_NAME: {} - {}",
+                                lastCachedEvent, event);
+                    }
+                    else if (event.getTableId() == null) {
+                        LOGGER.warn("debezium/dbz#1960: Unable to get TableId by DATA_OBJ#: {}", event);
+                    }
+                    if (!(event.getTransactionSequence() != null && event.getTransactionSequence() > 1)) {
+                        LOGGER.warn("debezium/dbz#1960: Enqueueing an INTERNAL event with unexpected SEQUENCE#: {}", event);
+                    }
+                    enqueueEvent(event, new LogMinerEvent(event));
+                }
+                else {
+                    LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID and a preceding cached event are from different tables: {} - {}",
+                            lastCachedEvent, event);
+                }
+            }
+        }
+    }
+
+    @Override
     protected void handleStartEvent(LogMinerEventRow event) {
         final String transactionId = event.getTransactionId();
         if (!isRecentlyProcessed(transactionId)) {
@@ -414,6 +442,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
                 cleanupAfterTransactionRemovedFromCache(transaction, false);
                 getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
                 getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+                getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+                getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
             }
             return;
         }
@@ -563,6 +593,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
             getMetrics().calculateLagFromSource(row.getChangeTime());
             getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
             getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+            getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+            getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
         }
 
         updateCommitMetrics(row, Duration.between(start, Instant.now()), numEvents);
@@ -576,6 +608,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
             finalizeTransaction(transactionId, event.getScn(), true);
             getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
             getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+            getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+            getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
         }
         else {
             LOGGER.debug("Transaction {} not found in cache, no events to rollback.", transactionId);
@@ -606,6 +640,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
                     finalizeTransaction(matched.getTransactionId(), event.getScn(), true);
                     getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
                     getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+                    getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+                    getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
                 }
                 else {
                     // Multiple matches - ambiguous, cannot determine which to rollback
@@ -1069,6 +1105,12 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
             getMetrics().calculateLagFromSource(event.getChangeTime());
 
             getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+            if (dispatchedEvent.getEventType() == EventType.INTERNAL) {
+                getMetrics().incrementBufferedInternalEventCount();
+            }
+            if (dispatchedEvent.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
+                getMetrics().incrementBufferedEmptyRowIdEventCount();
+            }
         }
 
         // When using Infinispan, this extra put is required so that the state is properly synchronized
@@ -1151,6 +1193,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
                     if (!abandoned.isEmpty()) {
                         getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
                         getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+                        getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+                        getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
                     }
 
                     if (LOGGER.isDebugEnabled()) {
@@ -1317,6 +1361,8 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
         getMetrics().addAbandonedTransactionId(transactionId);
         getMetrics().setActiveTransactionCount(getTransactionCache().getTransactionCount());
         getMetrics().setBufferedEventCount(getTransactionCache().getTransactionEvents());
+        getMetrics().setBufferedInternalEventCount(getTransactionCache().getTransactionInternalEvents());
+        getMetrics().setBufferedEmptyRowIdEventCount(getTransactionCache().getTransactionEmptyRowIdEvents());
 
         // Update oldest scn metric after manual abandonment
         getTransactionCache().getEldestTransactionScnDetailsInCache().ifPresentOrElse(

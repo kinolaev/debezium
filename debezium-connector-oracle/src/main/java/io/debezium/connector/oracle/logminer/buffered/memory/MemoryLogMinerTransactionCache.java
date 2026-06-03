@@ -16,8 +16,13 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import io.debezium.connector.oracle.logminer.LogMinerStreamingChangeEventSourceMetrics;
 import io.debezium.connector.oracle.logminer.buffered.AbstractLogMinerTransactionCache;
 import io.debezium.connector.oracle.logminer.buffered.LogMinerTransactionCache;
+import io.debezium.connector.oracle.logminer.events.EventType;
 import io.debezium.connector.oracle.logminer.events.LogMinerEvent;
 import io.debezium.connector.oracle.logminer.events.RowIdCodec;
 
@@ -29,10 +34,17 @@ import io.debezium.connector.oracle.logminer.events.RowIdCodec;
  */
 public class MemoryLogMinerTransactionCache extends AbstractLogMinerTransactionCache<MemoryTransaction> {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(MemoryLogMinerTransactionCache.class);
+
     private final Map<String, MemoryTransaction> transactionsByTransactionId = new HashMap<>();
     private final Map<String, List<LogMinerEventEntry>> eventsByTransactionId = new HashMap<>();
     private final Map<String, HashMap<Integer, LogMinerEvent>> eventsByEventIdByTransactionId = new HashMap<>();
     private final Map<String, Set<Integer>> rollbacksByTransactionId = new HashMap<>();
+    private final LogMinerStreamingChangeEventSourceMetrics metrics;
+
+    public MemoryLogMinerTransactionCache(LogMinerStreamingChangeEventSourceMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     @Override
     public MemoryTransaction getTransaction(String transactionId) {
@@ -135,11 +147,25 @@ public class MemoryLogMinerTransactionCache extends AbstractLogMinerTransactionC
         final var events = eventsByTransactionId.get(transaction.getTransactionId());
         if (events != null) {
             final Set<Integer> rollbacks = rollbacksByTransactionId.computeIfAbsent(transaction.getTransactionId(), k -> new HashSet<>());
+            boolean isPrevRolledBack = false;
             for (int i = events.size() - 1; i >= 0; i--) {
                 final LogMinerEventEntry entry = events.get(i);
+
+                final boolean isRolledBack = entry.event.getRowId() == RowIdCodec.EMPTY_ROW_ID ? isPrevRolledBack : rollbacks.contains(entry.eventId);
+                if (!isRolledBack && entry.event.getRowId() != encodedRowId) {
+                    LOGGER.warn("debezium/dbz#1960: {} An unexpected event was detected between a rolled back event and a rollback event: {} {}",
+                            transaction.getTransactionId(), rowId, entry.event);
+                }
+                isPrevRolledBack = isRolledBack;
+
                 if (entry.event.getRowId() == encodedRowId && !rollbacks.contains(entry.eventId)) {
                     rollbacks.add(entry.eventId);
-                    return true;
+                    if (entry.event.getEventType() == EventType.INTERNAL) {
+                        metrics.increasePartialRollbackByInternalRowIdCount();
+                    }
+                    else {
+                        return true;
+                    }
                 }
             }
         }
@@ -167,6 +193,18 @@ public class MemoryLogMinerTransactionCache extends AbstractLogMinerTransactionC
     @Override
     public int getTransactionEvents() {
         return eventsByTransactionId.values().stream().mapToInt(List::size).sum();
+    }
+
+    @Override
+    public int getTransactionInternalEvents() {
+        return (int) eventsByTransactionId.values().stream()
+                .mapToLong(entries -> entries.stream().filter(entry -> entry.event.getEventType() == EventType.INTERNAL).count()).sum();
+    }
+
+    @Override
+    public int getTransactionEmptyRowIdEvents() {
+        return (int) eventsByTransactionId.values().stream()
+                .mapToLong(entries -> entries.stream().filter(entry -> entry.event.getRowId() == RowIdCodec.EMPTY_ROW_ID).count()).sum();
     }
 
     @Override

@@ -409,6 +409,12 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
                 getBatchMetrics().rowObserved();
 
                 final LogMinerEventRow event = LogMinerEventRow.fromResultSet(resultSet, schema, getConfig());
+                if (event.getEventType() == EventType.INTERNAL) {
+                    getBatchMetrics().internalRowObserved();
+                    if (event.getTransactionSequence() != null && event.getTransactionSequence() > 1) {
+                        getBatchMetrics().internalSeqGtOneRowObserved();
+                    }
+                }
                 processEvent(event);
             }
 
@@ -481,6 +487,7 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
                 preProcessEvent(event);
 
                 switch (event.getEventType()) {
+                    case INTERNAL -> handleInternalEvent(event);
                     case MISSING_SCN -> handleMissingScnEvent(event);
                     case START -> handleStartEvent(event);
                     case COMMIT -> handleCommitEvent(event);
@@ -512,6 +519,16 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
      */
     protected void preProcessEvent(LogMinerEventRow event) {
         getBatchMetrics().rowProcessed();
+        if (event.getEventType() == EventType.INTERNAL) {
+            getBatchMetrics().internalRowProcessed();
+            if (event.getTransactionSequence() != null && event.getTransactionSequence() > 1) {
+                getBatchMetrics().internalSeqGtOneRowProcessed();
+            }
+        }
+    }
+
+    protected void handleInternalEvent(LogMinerEventRow event) throws InterruptedException {
+        // no-op
     }
 
     /**

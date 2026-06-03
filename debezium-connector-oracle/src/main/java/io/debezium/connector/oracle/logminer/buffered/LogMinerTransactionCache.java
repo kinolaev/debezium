@@ -111,6 +111,8 @@ public interface LogMinerTransactionCache<T extends Transaction> {
      */
     LogMinerEvent getTransactionEvent(T transaction, int eventKey);
 
+    LogMinerEvent getLastTransactionEvent(T transaction);
+
     /**
      * Applies a consumer to all event keys in the cache.
      * No assumptions should be made about the order of the event keys.
@@ -179,6 +181,10 @@ public interface LogMinerTransactionCache<T extends Transaction> {
      * @return the total number of cached events
      */
     int getTransactionEvents();
+
+    int getTransactionInternalEvents();
+
+    int getTransactionEmptyRowIdEvents();
 
     /**
      * Abandon the specific transaction. An abandoned transaction will have all its events

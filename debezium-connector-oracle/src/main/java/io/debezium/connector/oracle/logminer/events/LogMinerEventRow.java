@@ -266,6 +266,15 @@ public class LogMinerEventRow {
                 this.tableId = new TableId(catalogName, tablespaceName, tableName);
             }
         }
+        else if (schema != null) {
+            this.tableId = schema.getTableIdByObjectId(objectId, dataObjectId);
+            if (this.tableId == null) {
+                this.tableId = schema.getTableIdByObjectId(objectId, null);
+                if (this.tableId != null) {
+                    LOGGER.warn("debezium/dbz#1960: TableId was found without DATA_OBJD#: {} {} {}", objectId, dataObjectId, this.tableId);
+                }
+            }
+        }
     }
 
     private String getTransactionId(ResultSet rs) throws SQLException {

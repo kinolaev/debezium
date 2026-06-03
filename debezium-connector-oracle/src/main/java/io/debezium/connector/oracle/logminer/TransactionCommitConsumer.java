@@ -90,6 +90,9 @@ public class TransactionCommitConsumer implements AutoCloseable {
     private final ConstructionDetails currentExtendedStringDetails = new ConstructionDetails();
     private final ConstructionDetails currentXmlDetails = new ConstructionDetails();
 
+    private DmlEvent prevEmptyRowIdEvent = null;
+    private String prevRowId = null;
+    private int prevInternalEventCount = 0;
     private long dispatchEventIndex = 0;
     private long enqueueEventIndex = 0;
     private int totalEvents = 0;
@@ -133,6 +136,9 @@ public class TransactionCommitConsumer implements AutoCloseable {
         if (event instanceof DmlEvent dmlEvent) {
             acceptDmlEvent(dmlEvent, rolledBack, transactionId, transactionSequence);
         }
+        else if (event.getEventType() == EventType.INTERNAL) {
+            prevInternalEventCount++;
+        }
         else {
             acceptManipulationEvent(event);
         }
@@ -154,6 +160,62 @@ public class TransactionCommitConsumer implements AutoCloseable {
         String rowId = rowIdFromEvent(table, event);
         RowState rowState = rows.get(rowId);
         DmlEvent accumulatorEvent = (null == rowState) ? null : rowState.event;
+
+        if (event.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
+            if (prevEmptyRowIdEvent != null) {
+                if (prevInternalEventCount == 0) {
+                    if (event.getEventType() != EventType.SELECT_LOB_LOCATOR
+                            && event.getEventType() != EventType.EXTENDED_STRING_BEGIN
+                            && event.getEventType() != EventType.XML_BEGIN) {
+                        LOGGER.warn("debezium/dbz#1960: {} Contiguous events with empty ROW_IDs and unexpected types were detected: {} - {}", transactionId,
+                                prevEmptyRowIdEvent, event);
+                    }
+                    if (!prevRowId.equals(rowId)) {
+                        LOGGER.warn("debezium/dbz#1960: {} Contiguous events with empty ROW_IDs and diffrent primary keys were detected: {} - {}", transactionId,
+                                prevEmptyRowIdEvent, event);
+                    }
+                }
+                else if (prevInternalEventCount == 1) {
+                    if ((event.getEventType() == EventType.SELECT_LOB_LOCATOR
+                            || event.getEventType() == EventType.EXTENDED_STRING_BEGIN
+                            || event.getEventType() == EventType.XML_BEGIN) && prevRowId.equals(rowId)) {
+                        LOGGER.warn("debezium/dbz#1960: {} An INTERNAL event was detected between events with empty ROW_IDs and the same primary key: {} - {}",
+                                transactionId, prevEmptyRowIdEvent, event);
+                    }
+                }
+                else {
+                    LOGGER.warn("debezium/dbz#1960: {} More than one INTERNAL event were detected between events with empty ROW_IDs: {} - {}", transactionId,
+                            prevEmptyRowIdEvent, event);
+                }
+            }
+            prevEmptyRowIdEvent = event;
+            prevRowId = rowId;
+        }
+        else if (prevEmptyRowIdEvent != null) {
+            if (prevInternalEventCount == 0) {
+                if (event.getEventType() != EventType.UPDATE) {
+                    LOGGER.warn("debezium/dbz#1960: {} An unexpected non-UPDATE event with non-empty ROW_ID was detected: {}", transactionId, event);
+                }
+                else if (!prevRowId.equals(rowId)) {
+                    LOGGER.warn("debezium/dbz#1960: {} An event with empty ROW_ID and a following event with non-empty ROW_ID have different primary keys: {} - {}",
+                            transactionId, prevEmptyRowIdEvent, event);
+                }
+            }
+            else if (prevInternalEventCount == 1) {
+                if (event.getEventType() == EventType.UPDATE && prevRowId.equals(rowId)) {
+                    LOGGER.warn(
+                            "debezium/dbz#1960: {} An INTERNAL event was detected between an event with empty ROW_ID and an UPDATE with non-empty ROW_ID and the same primary key: {} - {}",
+                            transactionId, prevEmptyRowIdEvent, event);
+                }
+            }
+            else {
+                LOGGER.warn("debezium/dbz#1960: {} More than one INTERNAL event were detected between events with empty and non-empty ROW_IDs: {} - {}", transactionId,
+                        prevEmptyRowIdEvent, event);
+            }
+            prevEmptyRowIdEvent = null;
+            prevRowId = null;
+        }
+        prevInternalEventCount = 0;
 
         // DBZ-6963
         // This short-circuits the commit consumer's accumulation logic by assessing whether the
@@ -204,6 +266,23 @@ public class TransactionCommitConsumer implements AutoCloseable {
     }
 
     private void acceptManipulationEvent(LogMinerEvent event) {
+        if (event.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
+            if (prevEmptyRowIdEvent == null) {
+                LOGGER.info("debezium/dbz#1960: A manipulation event follows an event with non-empty ROW_ID: {}", event);
+            }
+            else if (prevInternalEventCount > 0) {
+                LOGGER.info("debezium/dbz#1960: A manipulation event follows an INTERNAL event with non-empty ROW_ID: {}", event);
+            }
+        }
+        else if (prevEmptyRowIdEvent != null) {
+            prevEmptyRowIdEvent = null;
+            prevRowId = null;
+            prevInternalEventCount = 0;
+        }
+        else {
+            prevInternalEventCount = 0;
+        }
+
         if (event instanceof LobWriteEvent || event instanceof LobEraseEvent) {
             acceptLobManipulationEvent(event);
         }

@@ -9,6 +9,8 @@ import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 
+import io.debezium.connector.oracle.logminer.events.LogMinerEvent;
+
 /**
  * An abstract implementation of {@link LogMinerTransactionCache}.
  *
@@ -55,5 +57,20 @@ public abstract class AbstractLogMinerTransactionCache<T extends Transaction> im
             return scnComparison;
         }
         return first.getChangeTime().compareTo(second.getChangeTime());
+    }
+
+    @Override
+    public LogMinerEvent getLastTransactionEvent(T transaction) {
+        return transaction.getNumberOfEvents() > 0 ? getTransactionEvent(transaction, transaction.getNumberOfEvents() - 1) : null;
+    }
+
+    @Override
+    public int getTransactionInternalEvents() {
+        return 0;
+    }
+
+    @Override
+    public int getTransactionEmptyRowIdEvents() {
+        return 0;
     }
 }

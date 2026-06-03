@@ -125,10 +125,20 @@ public interface LogMinerStreamingChangeEventSourceMetricsMXBean
      */
     int getLogSwitchCount();
 
+    long getLastBatchJdbcRows();
+
+    long getLastBatchJdbcInternalRows();
+
+    long getLastBatchJdbcInternalSeqGtOneRows();
+
     /**
      * @return the total number of database rows processed from LogMiner
      */
     long getTotalProcessedRows();
+
+    long getTotalProcessedInternalRows();
+
+    long getTotalProcessedInternalSeqGtOneRows();
 
     /**
      * @return number of current active transactions in the transaction buffer
@@ -314,6 +324,8 @@ public interface LogMinerStreamingChangeEventSourceMetricsMXBean
      */
     long getNumberOfPartialRollbackCount();
 
+    long getNumberOfPartialRollbackByInternalRowIdCount();
+
     /**
      * @return most recent transaction identifiers that were rolled back
      */
@@ -323,4 +335,8 @@ public interface LogMinerStreamingChangeEventSourceMetricsMXBean
      * @return the number of events currently buffered
      */
     long getNumberOfEventsInBuffer();
+
+    long getNumberOfInternalEventsInBuffer();
+
+    long getNumberOfEmptyRowIdEventsInBuffer();
 }

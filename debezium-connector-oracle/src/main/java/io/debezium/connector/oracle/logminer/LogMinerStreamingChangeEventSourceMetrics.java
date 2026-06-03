@@ -70,6 +70,8 @@ public class LogMinerStreamingChangeEventSourceMetrics
     private final AtomicInteger logSwitchCount = new AtomicInteger();
     private final AtomicInteger logMinerQueryCount = new AtomicInteger();
     private final AtomicInteger jdbcRows = new AtomicInteger();
+    private final AtomicInteger jdbcInternalRows = new AtomicInteger();
+    private final AtomicInteger jdbcInternalSeqGtOneRows = new AtomicInteger();
 
     private final AtomicLong sleepTime = new AtomicLong();
     private final AtomicLong minimumLogsMined = new AtomicLong();
@@ -77,13 +79,18 @@ public class LogMinerStreamingChangeEventSourceMetrics
     private final AtomicLong maxBatchProcessingThroughput = new AtomicLong();
     private final AtomicLong timeDifference = new AtomicLong();
     private final AtomicLong processedRowsCount = new AtomicLong();
+    private final AtomicLong processedInternalRowsCount = new AtomicLong();
+    private final AtomicLong processedInternalSeqGtOneRowsCount = new AtomicLong();
     private final AtomicLong activeTransactionCount = new AtomicLong();
     private final AtomicLong rolledBackTransactionCount = new AtomicLong();
     private final AtomicLong oversizedTransactionCount = new AtomicLong();
     private final AtomicLong changesCount = new AtomicLong();
     private final AtomicLong scnFreezeCount = new AtomicLong();
     private final AtomicLong partialRollbackCount = new AtomicLong();
+    private final AtomicLong partialRollbackByInternalRowIdCount = new AtomicLong();
     private final AtomicLong numberOfBufferedEvents = new AtomicLong();
+    private final AtomicLong numberOfBufferedInternalEvents = new AtomicLong();
+    private final AtomicLong numberOfBufferedEmptyRowIdEvents = new AtomicLong();
     private final AtomicLong numberOfCommittedEvents = new AtomicLong();
 
     private final DurationHistogramMetric batchProcessingDuration = new DurationHistogramMetric();
@@ -129,15 +136,22 @@ public class LogMinerStreamingChangeEventSourceMetrics
         super.reset();
 
         jdbcRows.set(0);
+        jdbcInternalRows.set(0);
+        jdbcInternalSeqGtOneRows.set(0);
         changesCount.set(0);
         processedRowsCount.set(0);
+        processedInternalRowsCount.set(0);
+        processedInternalSeqGtOneRowsCount.set(0);
         logMinerQueryCount.set(0);
         activeTransactionCount.set(0);
         rolledBackTransactionCount.set(0);
         oversizedTransactionCount.set(0);
         scnFreezeCount.set(0);
         partialRollbackCount.set(0);
+        partialRollbackByInternalRowIdCount.set(0);
         numberOfBufferedEvents.set(0);
+        numberOfBufferedInternalEvents.set(0);
+        numberOfBufferedEmptyRowIdEvents.set(0);
         numberOfCommittedEvents.set(0);
 
         fetchQueryDuration.reset();
@@ -249,8 +263,33 @@ public class LogMinerStreamingChangeEventSourceMetrics
     }
 
     @Override
+    public long getLastBatchJdbcRows() {
+        return jdbcRows.get();
+    }
+
+    @Override
+    public long getLastBatchJdbcInternalRows() {
+        return jdbcInternalRows.get();
+    }
+
+    @Override
+    public long getLastBatchJdbcInternalSeqGtOneRows() {
+        return jdbcInternalSeqGtOneRows.get();
+    }
+
+    @Override
     public long getTotalProcessedRows() {
         return processedRowsCount.get();
+    }
+
+    @Override
+    public long getTotalProcessedInternalRows() {
+        return processedInternalRowsCount.get();
+    }
+
+    @Override
+    public long getTotalProcessedInternalSeqGtOneRows() {
+        return processedInternalSeqGtOneRowsCount.get();
     }
 
     @Override
@@ -433,6 +472,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
     }
 
     @Override
+    public long getNumberOfPartialRollbackByInternalRowIdCount() {
+        return partialRollbackByInternalRowIdCount.get();
+    }
+
+    @Override
     public Set<String> getRolledBackTransactionIds() {
         return rolledBackTransactionIds.getAll();
     }
@@ -440,6 +484,16 @@ public class LogMinerStreamingChangeEventSourceMetrics
     @Override
     public long getNumberOfEventsInBuffer() {
         return numberOfBufferedEvents.get();
+    }
+
+    @Override
+    public long getNumberOfInternalEventsInBuffer() {
+        return numberOfBufferedInternalEvents.get();
+    }
+
+    @Override
+    public long getNumberOfEmptyRowIdEventsInBuffer() {
+        return numberOfBufferedEmptyRowIdEvents.get();
     }
 
     /**
@@ -562,6 +616,14 @@ public class LogMinerStreamingChangeEventSourceMetrics
         this.processedRowsCount.getAndAdd(processedRowsCount);
     }
 
+    public void setLastProcessedInternalRowsCount(long processedInternalRowsCount) {
+        this.processedInternalRowsCount.getAndAdd(processedInternalRowsCount);
+    }
+
+    public void setLastProcessedInternalSeqGtOneRowsCount(long processedInternalSeqGtOneRowsCount) {
+        this.processedInternalSeqGtOneRowsCount.getAndAdd(processedInternalSeqGtOneRowsCount);
+    }
+
     /**
      * Sets the number of current, active transactions in the transaction buffer.
      *
@@ -578,6 +640,22 @@ public class LogMinerStreamingChangeEventSourceMetrics
      */
     public void setBufferedEventCount(long bufferedEventCount) {
         this.numberOfBufferedEvents.set(bufferedEventCount);
+    }
+
+    public void setBufferedInternalEventCount(long bufferedInternalEventCount) {
+        this.numberOfBufferedInternalEvents.set(bufferedInternalEventCount);
+    }
+
+    public void incrementBufferedInternalEventCount() {
+        numberOfBufferedInternalEvents.incrementAndGet();
+    }
+
+    public void setBufferedEmptyRowIdEventCount(long bufferedEmptyRowIdEventCount) {
+        this.numberOfBufferedEmptyRowIdEvents.set(bufferedEmptyRowIdEventCount);
+    }
+
+    public void incrementBufferedEmptyRowIdEventCount() {
+        numberOfBufferedEmptyRowIdEvents.incrementAndGet();
     }
 
     /**
@@ -657,6 +735,14 @@ public class LogMinerStreamingChangeEventSourceMetrics
      */
     public void setLastBatchJdbcRows(int jdbcRows) {
         this.jdbcRows.set(jdbcRows);
+    }
+
+    public void setLastBatchJdbcInternalRows(int jdbcInternalRows) {
+        this.jdbcInternalRows.set(jdbcInternalRows);
+    }
+
+    public void setLastBatchJdbcInternalSeqGtOneRows(int jdbcInternalSeqGtOneRows) {
+        this.jdbcInternalSeqGtOneRows.set(jdbcInternalSeqGtOneRows);
     }
 
     /**
@@ -802,6 +888,10 @@ public class LogMinerStreamingChangeEventSourceMetrics
         partialRollbackCount.addAndGet(1);
     }
 
+    public void increasePartialRollbackByInternalRowIdCount() {
+        partialRollbackByInternalRowIdCount.addAndGet(1);
+    }
+
     @Override
     public String toString() {
         return "LogMinerStreamingChangeEventSourceMetrics{" +
@@ -825,6 +915,8 @@ public class LogMinerStreamingChangeEventSourceMetrics
                 ", maxBatchProcessingThroughput=" + maxBatchProcessingThroughput +
                 ", timeDifference=" + timeDifference +
                 ", processedRowsCount=" + processedRowsCount +
+                ", processedInternalRowsCount=" + processedInternalRowsCount +
+                ", processedInternalSeqGtOneRowsCount=" + processedInternalSeqGtOneRowsCount +
                 ", activeTransactionCount=" + activeTransactionCount +
                 ", rolledBackTransactionCount=" + rolledBackTransactionCount +
                 ", oversizedTransactionCount=" + oversizedTransactionCount +
@@ -1035,7 +1127,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
         private int rollbackCount;
         private int partialRollbackCount;
         private int jdbcRows;
+        private int jdbcInternalRows;
+        private int jdbcInternalSeqGtOneRows;
         private int processedRows;
+        private int processedInternalRows;
+        private int processedInternalSeqGtOneRows;
         private int metadataQueryCount;
 
         public BatchMetrics(LogMinerStreamingChangeEventSourceMetrics metrics) {
@@ -1072,8 +1168,24 @@ public class LogMinerStreamingChangeEventSourceMetrics
             jdbcRows++;
         }
 
+        public void internalRowObserved() {
+            jdbcInternalRows++;
+        }
+
+        public void internalSeqGtOneRowObserved() {
+            jdbcInternalSeqGtOneRows++;
+        }
+
         public void rowProcessed() {
             processedRows++;
+        }
+
+        public void internalRowProcessed() {
+            processedInternalRows++;
+        }
+
+        public void internalSeqGtOneRowProcessed() {
+            processedInternalSeqGtOneRows++;
         }
 
         public void tableMetadataQueryObserved() {
@@ -1083,7 +1195,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
         public void updateStreamingMetrics() {
             metrics.setLastCapturedDmlCount(dataChangeCount);
             metrics.setLastProcessedRowsCount(processedRows);
+            metrics.setLastProcessedInternalRowsCount(processedInternalRows);
+            metrics.setLastProcessedInternalSeqGtOneRowsCount(processedInternalSeqGtOneRows);
             metrics.setLastBatchJdbcRows(jdbcRows);
+            metrics.setLastBatchJdbcInternalRows(jdbcInternalRows);
+            metrics.setLastBatchJdbcInternalSeqGtOneRows(jdbcInternalSeqGtOneRows);
         }
 
         public boolean hasProcessedAnyTransactions() {
@@ -1104,7 +1220,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
             rollbackCount = 0;
             partialRollbackCount = 0;
             jdbcRows = 0;
+            jdbcInternalRows = 0;
+            jdbcInternalSeqGtOneRows = 0;
             processedRows = 0;
+            processedInternalRows = 0;
+            processedInternalSeqGtOneRows = 0;
             metadataQueryCount = 0;
         }
 
@@ -1112,7 +1232,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
         public String toString() {
             return "BatchMetrics: " +
                     "jdbcRows=" + jdbcRows +
+                    ", jdbcInternalRows=" + jdbcInternalRows +
+                    ", jdbcInternalSeqGtOneRows=" + jdbcInternalSeqGtOneRows +
                     ", processedRows=" + processedRows +
+                    ", processedInternalRows=" + processedInternalRows +
+                    ", processedInternalSeqGtOneRows=" + processedInternalSeqGtOneRows +
                     ", dmlCount=" + dataChangeCount +
                     ", ddlCount=" + schemaChangeCount +
                     ", insertCount=" + insertCount +
