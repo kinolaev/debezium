@@ -23,6 +23,7 @@ import io.debezium.connector.oracle.logminer.buffered.LogMinerTransactionCache;
 import io.debezium.connector.oracle.logminer.events.EventType;
 import io.debezium.connector.oracle.logminer.events.LogMinerEvent;
 import io.debezium.connector.oracle.logminer.events.RowIdCodec;
+import io.debezium.relational.TableId;
 
 /**
  * A concrete implementation of the {@link LogMinerTransactionCache} that stores transactions and events
@@ -145,24 +146,85 @@ public class MemoryLogMinerTransactionCache extends AbstractLogMinerTransactionC
         final var events = eventsByTransactionId.get(transaction.getTransactionId());
         if (events != null) {
             final Map<Integer, Integer> rollbacks = rollbacksByTransactionId.computeIfAbsent(transaction.getTransactionId(), k -> new HashMap<>());
-            boolean isPrevRolledBack = false;
+
+            boolean isRolledBack = false;
+            int rolledBack = 0;
+            boolean rolledBackInsertOrUpdateOrDelete = false;
+            TableId rolledBackTableId = null;
+            String rolledBackRsId = null;
             for (int i = events.size() - 1; i >= 0; i--) {
                 final LogMinerEventEntry entry = events.get(i);
-
-                final boolean isRolledBack = entry.event.getRowId() == RowIdCodec.EMPTY_ROW_ID ? isPrevRolledBack : rollbacks.containsKey(entry.eventId);
-                if (!isRolledBack && entry.event.getRowId() != encodedRowId) {
-                    LOGGER.warn("debezium/dbz#1960: {} An unexpected event was detected between a rolled back event and a rollback event: {} {}",
+                if (rollbackId < entry.eventId) {
+                    continue;
+                }
+                else if (rollbackId == entry.eventId) {
+                    LOGGER.warn("debezium/dbz#1960: {} A rollback event and another event have the same cache entry id: {} {}",
+                            transaction.getTransactionId(), rowId, entry.event);
+                    continue;
+                }
+                final Integer cachedRollbackId = rollbacks.get(entry.eventId);
+                if (cachedRollbackId != null && cachedRollbackId == rollbackId) {
+                    break;
+                }
+                isRolledBack = entry.event.getRowId() == RowIdCodec.EMPTY_ROW_ID ? isRolledBack : cachedRollbackId != null;
+                if (!isRolledBack) {
+                    if (entry.event.getRowId() == encodedRowId) {
+                        rolledBack = i;
+                        rolledBackTableId = entry.event.getTableId();
+                        if (entry.event.getEventType() == EventType.INTERNAL) {
+                            metrics.increasePartialRollbackByInternalRowIdCount();
+                        }
+                    }
+                    else {
+                        LOGGER.warn("debezium/dbz#1960: {} An unexpected event was detected between a rolled back event and a rollback event: {} {}",
+                                transaction.getTransactionId(), rowId, entry.event);
+                    }
+                    break;
+                }
+            }
+            for (int i = rolledBack - 1; i >= 0; i--) {
+                final LogMinerEventEntry entry = events.get(i);
+                if (entry.event.getRowId() != RowIdCodec.EMPTY_ROW_ID) {
+                    if (entry.event.getEventType() == EventType.INTERNAL) {
+                        metrics.increasePartialRollbackByInternalRowIdCount();
+                    }
+                    break;
+                }
+                if (rolledBackTableId != entry.event.getTableId()) {
+                    LOGGER.warn("debezium/dbz#1960: {} An unexpected TableId was detected between a rolled back event and a rollback event: {} {}",
                             transaction.getTransactionId(), rowId, entry.event);
                 }
-                isPrevRolledBack = isRolledBack;
+                if (entry.event.getEventType() == EventType.INSERT
+                        || entry.event.getEventType() == EventType.UPDATE
+                        || entry.event.getEventType() == EventType.DELETE) {
+                    if (rolledBackInsertOrUpdateOrDelete) {
+                        LOGGER.warn("debezium/dbz#1960: {} An unexpected INSERT/UPDATE/DELETE was detected between a rolled back event and a rollback event: {} {}",
+                                transaction.getTransactionId(), rowId, entry.event);
+                    }
+                    else if (rolledBackRsId != null && !rolledBackRsId.equals(entry.event.getRsId())) {
+                        LOGGER.warn("debezium/dbz#1960: {} An unexpected RS_ID was detected between a rolled back event and a rollback event: {} {}",
+                                transaction.getTransactionId(), rowId, entry.event);
+                    }
+                    rolledBackInsertOrUpdateOrDelete = true;
+                }
+                else if (entry.event.getEventType() == EventType.SELECT_LOB_LOCATOR
+                        || entry.event.getEventType() == EventType.EXTENDED_STRING_BEGIN) {
+                    if (rolledBackRsId == null) {
+                        rolledBackRsId = entry.event.getRsId();
+                    }
+                    else if (!rolledBackRsId.equals(entry.event.getRsId())) {
+                        LOGGER.warn("debezium/dbz#1960: {} An unexpected RS_ID was detected between a rolled back event and a rollback event: {} {}",
+                                transaction.getTransactionId(), rowId, entry.event);
+                    }
+                }
+            }
 
+            for (int i = events.size() - 1; i >= 0; i--) {
+                final LogMinerEventEntry entry = events.get(i);
                 if (entry.event.getRowId() == encodedRowId) {
                     final Integer cachedRollbackId = rollbacks.get(entry.eventId);
                     if (cachedRollbackId == null) {
                         rollbacks.put(entry.eventId, rollbackId);
-                        if (entry.event.getEventType() == EventType.INTERNAL) {
-                            metrics.increasePartialRollbackByInternalRowIdCount();
-                        }
                         return true;
                     }
                     if (cachedRollbackId == rollbackId) {
