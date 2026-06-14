@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +80,7 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
     private final String queryString;
     private final CacheProvider<Transaction> cacheProvider;
     private final TransactionFactory<Transaction> transactionFactory;
+    private final Map<String, LogMinerEventRow> unfinishedEventByTransactionId = new HashMap<>();
 
     private Instant lastProcessedScnChangeTime = null;
     private Scn lastProcessedScn = Scn.NULL;
@@ -368,28 +370,23 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
 
     @Override
     protected void handleInternalEvent(LogMinerEventRow event) throws InterruptedException {
-        final Transaction transaction = getTransactionCache().getTransaction(event.getTransactionId());
-        if (transaction != null) {
-            final LogMinerEvent lastCachedEvent = getTransactionCache().getLastTransactionEvent(transaction);
-            if (lastCachedEvent != null && lastCachedEvent.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
-                if (event.getTableId() == null || event.getTableId().equals(lastCachedEvent.getTableId())) {
-                    if (event.getTableName() != null) {
-                        LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID after a cached event with empty ROW_ID has TABLE_NAME: {} - {}",
-                                lastCachedEvent, event);
-                    }
-                    else if (event.getTableId() == null) {
-                        LOGGER.warn("debezium/dbz#1960: Unable to get TableId by DATA_OBJ#: {}", event);
-                    }
-                    if (!(event.getTransactionSequence() != null && event.getTransactionSequence() > 1)) {
-                        LOGGER.warn("debezium/dbz#1960: Enqueueing an INTERNAL event with unexpected SEQUENCE#: {}", event);
-                    }
-                    enqueueEvent(event, new LogMinerEvent(event));
-                }
-                else {
-                    LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID and a preceding cached event are from different tables: {} - {}",
-                            lastCachedEvent, event);
-                }
+        final LogMinerEventRow unfinishedEvent = unfinishedEventByTransactionId.get(event.getTransactionId());
+        if (unfinishedEvent != null && unfinishedEvent.getObjectId() == event.getObjectId()) {
+            if (event.getTableId() == null) {
+                event.setTableId(unfinishedEvent.getTableId());
             }
+            else {
+                LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID after a cached event with empty ROW_ID has TABLE_NAME: {} - {}",
+                        unfinishedEvent, event);
+            }
+            if (event.getTransactionSequence() == null || event.getTransactionSequence() < 2) {
+                LOGGER.warn("debezium/dbz#1960: Enqueueing an INTERNAL event with unexpected SEQUENCE#: {}", event);
+            }
+            enqueueEvent(event, new LogMinerEvent(event));
+        }
+        else if (unfinishedEvent != null) {
+            LOGGER.warn("debezium/dbz#1960: An INTERNAL event with non-empty ROW_ID and a preceding cached event are from different tables: {} - {}",
+                    unfinishedEvent, event);
         }
     }
 
@@ -736,6 +733,7 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
         final Transaction transaction = getTransactionCache().getTransaction(transactionId);
         if (transaction != null) {
             LOGGER.debug("Skipping GoldenGate replication marker for transaction {} with SCN {}", transactionId, event.getScn());
+            unfinishedEventByTransactionId.remove(transaction.getTransactionId());
             getTransactionCache().removeTransactionEvents(transaction);
             getTransactionCache().removeTransaction(transaction);
         }
@@ -1011,6 +1009,7 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
         else {
             getTransactionCache().removeAbandonedTransaction(transaction.getTransactionId());
         }
+        unfinishedEventByTransactionId.remove(transaction.getTransactionId());
         getTransactionCache().removeTransactionEvents(transaction);
     }
 
@@ -1053,6 +1052,7 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
         if (rollbackEvent) {
             final Transaction transaction = getTransactionCache().getTransaction(transactionId);
             if (transaction != null) {
+                unfinishedEventByTransactionId.remove(transaction.getTransactionId());
                 getTransactionCache().removeTransactionEvents(transaction);
                 getTransactionCache().removeTransaction(transaction);
             }
@@ -1112,6 +1112,13 @@ public class BufferedLogMinerStreamingChangeEventSource extends AbstractLogMiner
             if (dispatchedEvent.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
                 getMetrics().incrementBufferedEmptyRowIdEventCount();
             }
+        }
+
+        if (dispatchedEvent.getRowId() == RowIdCodec.EMPTY_ROW_ID) {
+            unfinishedEventByTransactionId.put(transactionId, event);
+        }
+        else {
+            unfinishedEventByTransactionId.remove(transactionId);
         }
 
         // When using Infinispan, this extra put is required so that the state is properly synchronized

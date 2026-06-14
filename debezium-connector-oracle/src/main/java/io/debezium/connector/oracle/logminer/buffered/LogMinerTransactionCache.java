@@ -111,8 +111,6 @@ public interface LogMinerTransactionCache<T extends Transaction> {
      */
     LogMinerEvent getTransactionEvent(T transaction, int eventKey);
 
-    LogMinerEvent getLastTransactionEvent(T transaction);
-
     /**
      * Applies a consumer to all event keys in the cache.
      * No assumptions should be made about the order of the event keys.
