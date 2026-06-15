@@ -150,7 +150,7 @@ public class BufferedLogMinerQueryBuilder extends AbstractLogMinerQueryBuilder {
     }
 
     private static String getInternalPredicate() {
-        return " OR (OPERATION_CODE = 0 AND ROLLBACK = 0 AND ROW_ID NOT LIKE '%AAAAAAAAAAAA')";
+        return " OR (OPERATION_CODE = 0 AND ROLLBACK = 0 AND ROW_ID NOT LIKE '%AAAAAAAAAAAA' AND SEQUENCE# > 1)";
     }
 
     private static String getDdlPredicate() {
